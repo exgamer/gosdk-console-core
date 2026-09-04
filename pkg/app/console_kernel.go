@@ -14,8 +14,10 @@ package app
 import (
 	"context"
 	"os"
+	"time"
 
 	"github.com/exgamer/gosdk-core/pkg/app"
+	"github.com/exgamer/gosdk-core/pkg/errorreporter"
 	"github.com/spf13/cobra"
 )
 
@@ -59,12 +61,38 @@ func (k *ConsoleKernel) Init(a *app.App) error {
 }
 
 // Start разбирает os.Args[1:] и выполняет сматченную cobra-команду.
-// Ошибка выполнения команды возвращается отсюда же — RunAll в gosdk-core
-// пробрасывает её вызывающей стороне как ошибку RunAll/RunKernel.
+// Ошибка выполнения команды репортится в Sentry (тегом - какая именно
+// команда упала) и возвращается отсюда же - RunAll в gosdk-core пробрасывает
+// её вызывающей стороне как ошибку RunAll/RunKernel. Если команда уже сама
+// вызвала errorreporter.Capture/CaptureError внутри своего RunE, повторной
+// отправки не будет - дедуп встроен в errorreporter.Capture (WasReported).
+//
+// После капчура - errorreporter.Flush: репортеры вроде sentry-go отправляют
+// события асинхронно в фоновой горутине, а ConsoleKernel.Stop() (где обычно
+// был бы шанс дождаться) для одноразовых команд никогда не вызывается - нет
+// graceful shutdown, вызывающий код (cmd/<name>/main.go) обычно сразу делает
+// log.Fatal(err). Без явного Flush здесь последнее событие рискует не уйти.
 func (k *ConsoleKernel) Start(a *app.App) error {
 	k.root.SetArgs(os.Args[1:])
 
-	return k.root.ExecuteContext(a.GetContext())
+	cmd, err := k.root.ExecuteContextC(a.GetContext())
+	if err != nil {
+		commandName := "unknown"
+		if cmd != nil {
+			commandName = cmd.Name()
+		}
+
+		reported := errorreporter.CaptureError(a.GetContext(), err, map[string]string{
+			"component": "console",
+			"command":   commandName,
+		})
+
+		errorreporter.Flush(2 * time.Second)
+
+		return reported
+	}
+
+	return nil
 }
 
 func (k *ConsoleKernel) Stop(ctx context.Context) error {
