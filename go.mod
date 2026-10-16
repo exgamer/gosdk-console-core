@@ -3,7 +3,7 @@ module github.com/exgamer/gosdk-console-core
 go 1.26.0
 
 require (
-	github.com/exgamer/gosdk-core v1.0.27
+	github.com/exgamer/gosdk-core v1.0.28
 	github.com/spf13/cobra v1.10.2
 )
 
